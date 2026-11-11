@@ -7,6 +7,8 @@ import { analyze, DEFAULT_PARAMS, type Params } from "./heuristics.ts";
 import type { ChainPreset } from "./chains.ts";
 import type { Market, RawTrade, Trade, TokenReport, WalletInfo } from "./types.ts";
 import { ZERO } from "./adapters/common.ts";
+import { discoverPoolsFromTransfers } from "./adapters/poolScan.ts";
+import { markNative } from "./native.ts";
 
 export interface DetectOpts {
   venues: string[] | "auto";
@@ -18,6 +20,9 @@ export interface DetectOpts {
   forceFlow?: boolean;
   params?: Params;
   enrich?: EnrichOpts;
+  /// Factory-free discovery: probe counterparties of the token's Transfer logs for V2 / V3
+  /// pools on every update. On by default with venues "auto".
+  poolScan?: boolean;
 }
 
 export async function discoverMarkets(rpc: Rpc, token: Address, fromBlock: number, toBlock: number, o: DetectOpts): Promise<Market[]> {
@@ -29,10 +34,15 @@ export async function discoverMarkets(rpc: Rpc, token: Address, fromBlock: numbe
   };
   const names = o.venues === "auto" ? ["pons", "uniswap-v2", "uniswap-v3", "uniswap-v4"] : o.venues;
   const out: Market[] = [];
+  const explicit = new Set(o.pools.map((p) => p.toLowerCase()));
   for (const n of names) {
     const a = ADAPTERS[n];
     if (!a) throw new Error(`unknown venue ${n}; known: ${Object.keys(ADAPTERS).join(", ")}`);
-    out.push(...(await a.discover(rpc, token, d)));
+    for (const m of await a.discover(rpc, token, d)) {
+      if (out.some((x) => x.address.toLowerCase() === m.address.toLowerCase() && x.poolId === m.poolId)) continue;
+      m.discoveredBy ??= explicit.has(m.address.toLowerCase()) ? "explicit" : "factory";
+      out.push(m);
+    }
   }
   // fall back to raw Transfer flow for explicit pools no adapter recognised
   if (o.venues === "auto" || o.venues.includes("transfer-flow")) {
@@ -40,6 +50,7 @@ export async function discoverMarkets(rpc: Rpc, token: Address, fromBlock: numbe
     const rest = o.pools.filter((p) => !known.has(p.toLowerCase()));
     if (rest.length) out.push(...(await ADAPTERS["transfer-flow"].discover(rpc, token, { ...d, pools: rest })));
   }
+  await markNative(rpc, out, o.preset);
   return out;
 }
 
@@ -60,6 +71,7 @@ export class TokenDetector {
   seen = new Set<string>();
   walletCache = new Map<string, WalletInfo>();
   markets: Market[] = [];
+  probed = new Set<string>();
   lastBlock = -1;
   firstBlock = -1;
   rpc: Rpc;
@@ -80,6 +92,20 @@ export class TokenDetector {
   async update(toBlock: number): Promise<number> {
     if (toBlock <= this.lastBlock) return 0;
     const raw = await fetchTrades(this.rpc, this.markets, this.lastBlock + 1, toBlock);
+    if (this.o.venues === "auto" && this.o.poolScan !== false) {
+      // pools that first appear in this range: add them and backfill from the start
+      const found = await discoverPoolsFromTransfers(this.rpc, this.token, this.lastBlock + 1, toBlock, {
+        known: new Set(this.markets.map((m) => m.address.toLowerCase())),
+        probed: this.probed,
+        skip: this.o.preset?.uniswapV4PoolManager ? [this.o.preset.uniswapV4PoolManager] : [],
+      });
+      if (found.length) {
+        found.forEach((m) => (m.discoveredBy = "pool-scan"));
+        await markNative(this.rpc, found, this.o.preset);
+        this.markets.push(...found);
+        raw.push(...(await fetchTrades(this.rpc, found, this.firstBlock, toBlock)));
+      }
+    }
     this.lastBlock = toBlock;
     const fresh = raw.filter((r) => !this.seen.has(`${r.tx}:${r.logIndex}`));
     fresh.forEach((r) => this.seen.add(`${r.tx}:${r.logIndex}`));

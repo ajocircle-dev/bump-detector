@@ -19,6 +19,7 @@ export function decodeV4(l: Log, m: Market): RawTrade | null {
     venue: "uniswap-v4", market: m.address, token: m.token, side,
     tokenAmount: abs(tok), quoteAmount: abs(q),
     eventSender: addrFromTopic(l.topics[2]!),
+    poolId: l.topics[1] as Hex,
     ...base(l),
   };
 }

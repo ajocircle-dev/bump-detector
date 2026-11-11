@@ -354,6 +354,14 @@ export function analyze(
   const traders = new Set(trades.map((t) => lc(t.trader)));
   const hasQuote = trades.length > 0 && trades.every((t) => t.quoteAmount !== null);
   const score = clusters[0]?.score ?? 0;
+  const mk = (a: string, id?: string) => `${lc(a)}:${lc(id ?? "")}`;
+  const nativeMarkets = new Set(markets.filter((m) => m.nativeQuote).map((m) => mk(m.address, m.poolId)));
+  const nativeTrades = trades.filter((t) => t.quoteAmount !== null && nativeMarkets.has(mk(t.market, t.poolId)));
+  const entryPoints: Record<string, number> = {};
+  for (const t of trades) {
+    const k = t.viaLabel ?? t.via ?? "unknown";
+    entryPoints[k] = (entryPoints[k] ?? 0) + 1;
+  }
   const notes: string[] = [];
   if (!trades.length) notes.push("no trades found in range");
   if ([...wallets.values()].every((w) => !w.funding)) notes.push("no funding transfers found in the scan window; funding rules did not contribute");
@@ -369,6 +377,8 @@ export function analyze(
       distinctWalletRatio: trades.length ? Number((traders.size / trades.length).toFixed(4)) : 0,
       quoteVolume: hasQuote ? trades.reduce((a, t) => a + t.quoteAmount!, 0n).toString() : null,
       flaggedTradeShare: trades.length ? Number((flaggedTrades.length / trades.length).toFixed(4)) : 0,
+      nativeVolumeWei: nativeTrades.length ? nativeTrades.reduce((a, t) => a + t.quoteAmount!, 0n).toString() : null,
+      entryPoints,
     },
     clusters,
     flaggedWallets: [...fw] as Address[],

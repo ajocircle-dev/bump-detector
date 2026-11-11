@@ -8,7 +8,8 @@ import { PRESETS, type ChainPreset } from "./chains.ts";
 import { TokenDetector, type DetectOpts } from "./detect.ts";
 import { DEFAULT_PARAMS } from "./heuristics.ts";
 import { DEFAULT_ENRICH } from "./enrich.ts";
-import { ponsLaunches } from "./adapters/pons.ts";
+import { findLaunches, type LaunchKind } from "./launches.ts";
+import { ZERO } from "./adapters/common.ts";
 import { toJson, table, detail } from "./report.ts";
 import type { TokenReport } from "./types.ts";
 
@@ -23,6 +24,7 @@ const HELP = `bump-detector <scan|watch|launchpad> [options]
   --v4-pool-id <list>   restrict Uniswap V4 pools
   --router <a=label>    extra router labels, comma separated
   --force-flow          attribute every trade by Transfer flow instead of tx.from
+  --skip-pool-scan      do not probe Transfer counterparties for V2 / V3 pools and curves
   --from-block <n>      start block (default: head - lookback)
   --lookback <n>        blocks back from head when --from-block is not set (default 20000)
   --to-block <n>        end block (default: head)
@@ -32,7 +34,8 @@ const HELP = `bump-detector <scan|watch|launchpad> [options]
   --json <file>         write the JSON report
   --interval <sec>      watch poll interval (default 4)
   --out <file>          watch: append each new report as a JSON line
-  --factory <list>      launchpad: launch factories (default: preset Pons factory)
+  --kind <pons|v2|v3>   launchpad: factory type (default pons if the preset has one, else v2)
+  --factory <list>      launchpad: launch factories (default: preset Pons or V2 / V3 factories)
   --min-trades <n>      launchpad: skip tokens with fewer trades (default 12)
   --quiet               only print the table
 `;
@@ -45,7 +48,7 @@ const { positionals, values: v } = parseArgs({
     "force-flow": { type: "boolean" }, "from-block": { type: "string" }, lookback: { type: "string" }, "to-block": { type: "string" },
     "window-sec": { type: "string" }, threshold: { type: "string" }, "burst-gap": { type: "string" }, json: { type: "string" },
     interval: { type: "string" }, out: { type: "string" }, factory: { type: "string" }, "min-trades": { type: "string" },
-    quiet: { type: "boolean" }, help: { type: "boolean" },
+    quiet: { type: "boolean" }, help: { type: "boolean" }, "skip-pool-scan": { type: "boolean" }, kind: { type: "string" },
   },
 });
 const list = (s?: string) => (s ? s.split(",").map((x) => x.trim()).filter(Boolean) : []);
@@ -71,7 +74,7 @@ async function main() {
   const o: DetectOpts = {
     venues: !v.venue || v.venue === "auto" ? "auto" : list(v.venue),
     pools: addrs(v.pool), quotes: addrs(v.quote), v4PoolIds: list(v["v4-pool-id"]) as Hex[],
-    preset, extraRouters, forceFlow: !!v["force-flow"],
+    preset, extraRouters, forceFlow: !!v["force-flow"], poolScan: !v["skip-pool-scan"],
     params: { ...DEFAULT_PARAMS, flagThreshold: Number(v.threshold ?? DEFAULT_PARAMS.flagThreshold), burstGapSec: Number(v["burst-gap"] ?? DEFAULT_PARAMS.burstGapSec) },
     enrich: { ...DEFAULT_ENRICH, windowSec: Number(v["window-sec"] ?? DEFAULT_ENRICH.windowSec) },
   };
@@ -128,9 +131,13 @@ async function main() {
   }
 
   if (cmd === "launchpad") {
-    const factories = v.factory ? addrs(v.factory) : preset?.ponsFactories ?? [];
+    const kind = (v.kind ?? (preset?.ponsFactories?.length ? "pons" : "v2")) as LaunchKind;
+    if (!["pons", "v2", "v3"].includes(kind)) throw new Error("--kind must be pons, v2 or v3");
+    const presetFactories = kind === "pons" ? preset?.ponsFactories : kind === "v2" ? preset?.uniswapV2Factories : preset?.uniswapV3Factories;
+    const factories = v.factory ? addrs(v.factory) : presetFactories ?? [];
     if (!factories.length) throw new Error("--factory required (no preset launch factory)");
-    const launches = await ponsLaunches(rpc as never, factories, fromBlock, toBlock);
+    const quotes = o.quotes.length ? o.quotes : preset?.weth ? [preset.weth] : [];
+    const launches = await findLaunches(rpc, kind, factories, quotes.filter((q) => q !== ZERO), fromBlock, toBlock);
     console.error(`found ${launches.length} launches in blocks ${fromBlock}..${toBlock}`);
     const min = Number(v["min-trades"] ?? 12);
     const reports: TokenReport[] = [];
@@ -138,7 +145,7 @@ async function main() {
     for (const l of launches) {
       i++;
       if (!v.quiet || i % 10 === 0) console.error(`[${i}/${launches.length}] ${l.token}`);
-      const d = new TokenDetector(rpc, l.token, { ...o, venues: ["pons"], pools: [l.curve] });
+      const d = new TokenDetector(rpc, l.token, { ...o, venues: [l.venue], pools: [l.market] });
       await d.init(l.block, toBlock);
       await d.update(toBlock);
       if (d.trades.length < min) continue;

@@ -12,6 +12,8 @@ export interface Market {
   tokenIndex?: 0 | 1; // for v2/v3/v4: is the token currency0 or currency1
   poolId?: Hex; // v4 only
   fee?: number;
+  nativeQuote?: boolean; // quote is native ETH (0x0 in V4) or its wrapped form (WETH)
+  discoveredBy?: "explicit" | "factory" | "pool-scan" | "launch";
 }
 
 /// A trade as decoded from a venue event, before trader attribution.
@@ -28,6 +30,7 @@ export interface RawTrade {
   tx: Hex;
   eventSender?: Address;
   eventRecipient?: Address;
+  poolId?: Hex; // uniswap-v4: the pool id inside the PoolManager
 }
 
 export interface Trade extends RawTrade {
@@ -107,6 +110,8 @@ export interface TokenReport {
     distinctWalletRatio: number;
     quoteVolume: string | null;
     flaggedTradeShare: number;
+    nativeVolumeWei: string | null; // quote volume on markets quoted in native ETH / WETH
+    entryPoints: Record<string, number>; // trades per tx.to (router / aggregator label or address)
   };
   clusters: ClusterReport[];
   flaggedWallets: Address[];

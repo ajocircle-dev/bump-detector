@@ -27,9 +27,11 @@ export function table(rs: TokenReport[]): string {
 export function detail(r: TokenReport): string {
   const L: string[] = [];
   L.push(`token ${r.token} on chain ${r.chainId}, blocks ${r.fromBlock} to ${r.toBlock}`);
-  L.push(`markets: ${r.markets.map((m) => `${m.venue}@${short(m.address)}${m.poolId ? `#${m.poolId.slice(0, 10)}` : ""}`).join(", ") || "none"}`);
-  const vol = r.stats.quoteVolume ? `, quote volume ${formatEther(BigInt(r.stats.quoteVolume))}` : "";
+  L.push(`markets: ${r.markets.map((m) => `${m.venue}@${short(m.address)}${m.poolId ? `#${m.poolId.slice(0, 10)}` : ""}${m.nativeQuote ? " (ETH)" : ""}${m.discoveredBy ? ` [${m.discoveredBy}]` : ""}`).join(", ") || "none"}`);
+  const vol = r.stats.nativeVolumeWei ? `, ETH volume ${formatEther(BigInt(r.stats.nativeVolumeWei))}` : r.stats.quoteVolume ? `, quote volume ${formatEther(BigInt(r.stats.quoteVolume))}` : "";
   L.push(`trades ${r.stats.trades} (${r.stats.buys} buys, ${r.stats.sells} sells), distinct wallets ${r.stats.distinctTraders}, ratio ${r.stats.distinctWalletRatio}${vol}`);
+  const eps = Object.entries(r.stats.entryPoints ?? {}).sort((a, b) => b[1] - a[1]);
+  if (eps.length) L.push(`entry points (tx.to): ${eps.map(([k, n]) => `${k.startsWith("0x") ? short(k) : k} ${n}`).join(", ")}`);
   L.push(`score ${r.score} -> ${r.verdict}`);
   for (const c of r.clusters) {
     L.push(`  [${c.id}] score ${c.score} ${c.verdict} basis ${c.basis} wallets ${c.wallets.length}${c.funder ? ` funder ${c.funder}` : ""}`);
