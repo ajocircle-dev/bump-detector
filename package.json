@@ -1,0 +1,17 @@
+{
+  "name": "bump-detector",
+  "version": "0.1.0",
+  "description": "Flag fake volume (bump bots, wash trading) on EVM tokens from public chain data.",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "bump-detector": "src/cli.ts" },
+  "engines": { "node": ">=23.6" },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "scan": "node src/cli.ts scan",
+    "watch": "node src/cli.ts watch"
+  },
+  "dependencies": {
+    "viem": "2.57.18"
+  }
+}
