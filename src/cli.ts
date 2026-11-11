@@ -134,7 +134,10 @@ async function main() {
     console.error(`found ${launches.length} launches in blocks ${fromBlock}..${toBlock}`);
     const min = Number(v["min-trades"] ?? 12);
     const reports: TokenReport[] = [];
+    let i = 0;
     for (const l of launches) {
+      i++;
+      if (!v.quiet || i % 10 === 0) console.error(`[${i}/${launches.length}] ${l.token}`);
       const d = new TokenDetector(rpc, l.token, { ...o, venues: ["pons"], pools: [l.curve] });
       await d.init(l.block, toBlock);
       await d.update(toBlock);
